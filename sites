@@ -1,4 +1,4 @@
-#! /bin/sh
+#! /bin/bash
 
 
 SCRIPT_DIR=/opt/sites-mgr/
@@ -517,7 +517,7 @@ new_site () {
     fake rm -rf "${site_full_path}private"
   fi
   if [ "$assets" != OK ]
-  else
+  then
     fake rm -rf "${site_full_path}assets"
   fi
   if [ "$https" != OK -a "$https" != FORCE ]
