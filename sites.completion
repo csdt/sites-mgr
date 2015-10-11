@@ -1,0 +1,190 @@
+#! /bin/bash
+
+_sites() {
+  addmatch() {
+    pattern="^$(echo "$cur" | sed 's/[]\/$*.^|[]/\\&/g')"
+    while [ $# != 0 ]
+    do
+      if echo "$1" | grep "$pattern" &>/dev/null
+      then
+        COMPREPLY+=("$1")
+      fi
+      shift
+    done
+  }
+  addshopts() {
+    while [ $# != 0 ]
+    do
+      if echo "$cur" | grep "^$1" &>/dev/null
+      then
+        COMPREPLY=("$cur")
+        return
+      fi
+      shift
+    done
+  }
+  adddomain() {
+    addmatch $(sites domain ls)
+  }
+  addsitename() {
+    case "$1" in
+      domain-only)
+        if sites domain path "$prev" &>/dev/null
+        then
+          return 1
+        fi
+        adddomain
+        ;;
+      domain-syntax)
+        if sites domain path "$prev" &>/dev/null
+        then
+          addmatch $(sites ls "$prev")
+          return 1
+        fi
+        adddomain
+        ;;
+      sitename-syntax)
+        if sites domain path "$prev" &>/dev/null
+        then
+          addmatch $(sites ls "$prev")
+          return 1
+        fi
+        for domain in $(sites domain ls)
+        do
+          for site in $(sites ls "$domain")
+          do
+            addmatch "${site}.${domain}"
+          done
+        done
+        ;;
+      both)
+        addsitename domain-syntax &&
+        addsitename sitename-syntax
+        ;;
+    esac
+  }
+  d() {
+    echo "$@" &>>/tmp/completion
+  }
+  local i cur prev
+
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev=
+  if (( $COMP_CWORD > 1 ))
+  then
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+  fi
+  COMPREPLY=()
+
+  i=1
+  while (( $i < $COMP_CWORD ))
+  do
+    i=$(( $i + 1 ))
+    case "${COMP_WORDS[$i-1]}" in
+      domain)
+        while (( $i < $COMP_CWORD ))
+        do
+          i=$(( $i + 1 ))
+          case "${COMP_WORDS[$i-1]}" in
+            remove|path)
+              adddomain
+              return
+              ;;
+            ls|new)
+              return
+              ;;
+            *)
+              ;;
+          esac
+        done
+        addmatch ls new remove path --fake --quiet --verbose --version
+        addshopts -f -q -v
+        return
+        ;;
+      ls)
+        adddomain
+        addmatch --all --enabled --disabled
+        addshopts -a -e -d
+        return
+        ;;
+      enable)
+        addsitename both
+        return
+        ;;
+      disable)
+        addsitename both
+        return
+        ;;
+      new)
+        if [ "$prev" = "-u" -o "$prev" = "--user" ]
+        then
+          COMPREPLY+=($(compgen -u -- "$cur"))
+          return
+        fi
+        if [ "$prev" = "-g" -o "$prev" = "--group" ]
+        then
+          COMPREPLY+=($(compgen -g -- "$cur"))
+          return
+        fi
+        if echo "$cur" | grep '^--user=' &>/dev/null
+        then
+          COMPREPLY+=($(compgen -u -P '--user=' -- "$(echo "$cur" | sed 's/^--user=//')"))
+          return
+        fi
+        if echo "$cur" | grep '^--group=' &>/dev/null
+        then
+          COMPREPLY+=($(compgen -u -P '--group=' -- "$(echo "$cur" | sed 's/^--group=//')"))
+          return
+        fi
+        addsitename domain-only &&
+        addmatch --user --no-user --group --no-group --no-https --https --force-https \
+                 --private --no-private --assets --no-assets
+        addshopts -u -U -g -G -s -S -p -P -a -A
+        return
+        ;;
+      remove)
+        addsitename both
+        addmatch --force --ask --remove-user --keep-user
+        addshopts -f -a -u -U
+        return
+        ;;
+      path)
+        addsitename both
+        return
+        ;;
+      status)
+        addsitename both
+        return
+        ;;
+      ssl)
+        if [ "$prev" = "ssl" ]
+        then
+          addmatch generate clear info revoke
+        else
+          addsitename both
+        fi
+        return
+        ;;
+      help)
+        addmatch domain ls enable disable new remove path status ssl
+        return
+        ;;
+      *)
+        ;;
+    esac
+  done
+  addmatch domain ls enable disable new remove path status help ssl --fake --quiet --verbose --version
+  addshopts -f -q -v
+
+  unset -f addmatch adddomain addsitename
+}
+
+_domain() {
+  ((COMP_CWORD++))
+  COMP_WORDS=( "${COMP_WORDS[0]}" domain "${COMP_WORDS[@]:1}" )
+  _sites
+}
+
+complete -F _sites sites
+complete -F _domain domain
+
