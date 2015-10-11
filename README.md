@@ -184,6 +184,9 @@ Warning: this command doesn't revoke it and should be used carefully.
 +-> domain2.com/
      ...
 ```
+## Dependencies
+- `apache`
+- `openssl`: to manage certificates
 ## Disclaimer
 ### Permissions
 This tool needs root permissions as it need to `chown` directories.
