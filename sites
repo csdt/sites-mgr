@@ -435,6 +435,7 @@ find_or_create_user () {
       error "Cannot add the user $user"
       return 1
     fi
+    fake adduser "$user" www-data
   fi
 
   if [ -z "$group" ]
@@ -510,8 +511,8 @@ new_site () {
   verbose "Creating Skeleton"
   fake cp -R --no-preserve=all "${SKEL_DIR}site/." "$site_full_path"
   fake chown -R "$user:$group" "${site_full_path}assets" "${site_full_path}public" "${site_full_path}private"
-  fake chown -R root:root "${site_full_path}conf" "${site_full_path}logs" "${site_full_path}ssl"
-  fake chmod og-rwx "${site_full_path}conf" "${site_full_path}private" "${site_full_path}logs" "${site_full_path}ssl"
+  fake chown -R root:root "${site_full_path}conf" "${site_full_path}logs"
+  fake chmod og-rwx "${site_full_path}conf" "${site_full_path}private" "${site_full_path}logs"
   if [ "$private" != OK ]
   then
     fake rm -rf "${site_full_path}private"
@@ -519,10 +520,6 @@ new_site () {
   if [ "$assets" != OK ]
   then
     fake rm -rf "${site_full_path}assets"
-  fi
-  if [ "$https" != OK -a "$https" != FORCE ]
-  then
-    fake rm -rf "${site_full_path}ssl"
   fi
   fake chmod -w "$site_full_path"
 
@@ -752,8 +749,8 @@ remove_site () {
         exit 1
       fi
       . "$ADDUSER_CONF_FILE"
-      if $(("$(id -u "$user")" < "$FIRST_SYSTEM_UID")) ||
-         $(("$(id -u "$user")" > "$LAST_SYSTEM_UID"))
+      if [ "$(id -u "$user")" -lt "$FIRST_SYSTEM_UID" -o \
+          "$(id -u "$user")" -gt "$LAST_SYSTEM_UID" ]
       then
         error "$user is not a website user"
         error "Please try again without removing the user"
@@ -873,6 +870,35 @@ parse_domain_arg () {
   esac
 }
 
+
+test_cert=
+#test_cert="--test-cert"
+
+ssl_server_name=
+ssl_domains=
+certbot_clo=
+
+ssl_get_domains () {
+  ssl_server_name=
+  ssl_domains=
+  certbot_clo=
+  if [ -z "$site_full_path" ]
+  then
+    return 1
+  fi
+  ssl_server_name="$(sed -n 's/^\s*ServerName\s\+\(.*\S\)\s*$/\1/p' "${site_full_path}conf/https.conf")"
+  for d in $ssl_server_name $(sed -n 's/^\s*ServerAlias\s\+\(.*\S\)\s*$/\1/p' "${site_full_path}conf/https.conf")
+  do
+    if echo "$d" | grep -v "all\|local" | grep '\.' > /dev/null 2>&1
+    then
+      ssl_domains="$ssl_domains $d"
+      certbot_clo="$certbot_clo -d $d"
+    fi
+  done
+  ssl_domains="$(echo "$ssl_domains" | sed 's/\s*\(.*\)\s*$/\1/')"
+  ssl_server_name="$(echo "$ssl_domains" | sed 's/\s.*$//')"
+}
+
 revoke_ssl () {
   site_name=
   site_path=
@@ -891,9 +917,15 @@ revoke_ssl () {
     return 1
   fi
 
-  servername="$(sed -n 's/^\s*ServerName\s\+\(.*\S\)\s*$/\1/p' "${site_full_path}conf/https.conf")"
-  serveralias="$(sed -n 's/^\s*ServerAlias\s\+\(.*\S\)\s*$/\1/p' "${site_full_path}conf/https.conf")"
-
+  ssl_get_domains
+  email="hostmaster@$(echo "$ssl_server_name" | sed 's/^\(.*\.\)\?\([^.]\+\.[^.]\+\)$/\2/')"
+  if ! promptyn "Are you sure you want to revoke the \"${site_name}\" certificate? [y/N]" N
+  then
+    error "Aborted..."
+    exit 1
+  fi
+  fake certbot revoke -n $test_cert -m "$email" --cert-path "/etc/letsencrypt/live/${ssl_server_name}/cert.pem"
+  return $!
   key="${site_full_path}ssl/private.key"
   csr="${site_full_path}ssl/signing-request.csr"
   crt="${site_full_path}ssl/public.crt"
@@ -941,8 +973,11 @@ generate_ssl () {
     return 1
   fi
 
-  servername="$(sed -n 's/^\s*ServerName\s\+\(.*\S\)\s*$/\1/p' "${site_full_path}conf/https.conf")"
-  serveralias="$servername $(sed -n 's/^\s*ServerAlias\s\+\(.*\S\)\s*$/\1/p' "${site_full_path}conf/https.conf")"
+  ssl_get_domains
+  email="hostmaster@$(echo "$ssl_server_name" | sed 's/^\(.*\.\)\?\([^.]\+\.[^.]\+\)$/\2/')"
+  fake certbot certonly -n $test_cert -m "$email" $certbot_clo
+  #certbot certonly -n $test_cert --webroot -w "$site_full_path" -m "$email" --cert-name "$site_full_name" $clo
+  return $!
 
   key="${site_full_path}ssl/private.key"
   csr="${site_full_path}ssl/signing-request.csr"
@@ -993,8 +1028,19 @@ clear_ssl () {
     return 1
   fi
 
-  servername="$(sed -n 's/^\s*ServerName\s\+\(.*\S\)\s*$/\1/p' "${site_full_path}conf/https.conf")"
-  serveralias="$(sed -n 's/^\s*ServerAlias\s\+\(.*\S\)\s*$/\1/p' "${site_full_path}conf/https.conf")"
+  ssl_get_domains
+  if ! promptyn "Are you sure you want to delete the \"${site_name}\" certificate? [y/N]" N
+  then
+    error "Aborted..."
+    exit 1
+  fi
+  reason="--reason cessationofoperation"
+  #fake certbot revoke -n -m "$email" $reason --cert-path "/etc/letsencrypt/live/${ssl_server_name}/cert.pem"
+  rm -rf "/etc/letsencrypt/live/${ssl_server_name:-dummy}"
+  rm -rf "/etc/letsencrypt/renewal/${ssl_server_name:-dummy}.conf"
+  rm -rf "/etc/letsencrypt/archive/${ssl_server_name:-dummy}"
+  info "Certificate deleted"
+  return 0
 
   key="${site_full_path}ssl/private.key"
   csr="${site_full_path}ssl/signing-request.csr"
